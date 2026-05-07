@@ -1,70 +1,94 @@
 import streamlit as st
 from streamlit_gsheets import GSheetsConnection
 import pandas as pd
-from datetime import datetime
 
 # Configuración de la página
-st.set_page_config(page_title="Control de Presupuesto - Fundación Masaveu", page_icon="💰")
+st.set_page_config(page_title="Seguimiento de Presupuesto", layout="centered")
 
-st.title("📦 Seguimiento de Albaranes y Presupuesto")
-st.markdown("Introduzca los datos del albarán recibido en obra.")
+st.title("🏗️ Seguimiento de Presupuesto de Obra")
+st.markdown("Introduce los datos del albarán para actualizar el presupuesto.")
 
-# Conexión a Google Sheets
+# 1. Conexión con Google Sheets
+# Nota: Los errores previos ocurrían porque 'spreadsheet' no estaba definido en Secrets.
 conn = st.connection("gsheets", type=GSheetsConnection)
 
-# --- FORMULARIO DE ENTRADA ---
-with st.form(key="presupuesto_form"):
+# 2. Función para leer datos de forma segura
+def cargar_datos():
+    try:
+        # Intentamos leer la hoja "Sheet1" (asegúrate que se llame así en tu Excel)
+        return conn.read(worksheet="Sheet1", ttl="0")
+    except Exception as e:
+        # Si la hoja está vacía o no existe, creamos un DataFrame con las columnas necesarias
+        return pd.DataFrame(columns=[
+            "Numero_Albaran", "Fecha", "Trabajador", "Partida", "Gastos", "Comentarios"
+        ])
+
+data = cargar_datos()
+
+# 3. Formulario de entrada de datos
+with st.form(key="presupuesto_form", clear_on_submit=True):
     col1, col2 = st.columns(2)
     
     with col1:
         n_albaran = st.text_input("Número de Albarán*")
-        fecha = st.date_input("Fecha", datetime.now())
-        trabajador = st.selectbox("Trabajador", ["Juan Pérez", "Ana García", "Carlos Rodríguez"])
+        fecha = st.date_input("Fecha")
+        trabajador = st.text_input("Trabajador*")
     
     with col2:
-        partida = st.selectbox("Partida Presupuestaria", [
+        # Partidas personalizables
+        partida = st.selectbox("Partida asociada", [
             "Cimentación", 
             "Estructura", 
             "Instalaciones", 
-            "Acabados",
-            "Maquinaria"
+            "Acabados", 
+            "Mano de Obra", 
+            "Maquinaria",
+            "Otros"
         ])
-        gasto = st.number_input("Gastos de esta partida (€)", min_value=0.0, step=0.01)
+        gastos = st.number_input("Gastos del albarán (€)", min_value=0.0, step=0.01, format="%.2f")
     
     comentarios = st.text_area("Comentarios")
     
     submit_button = st.form_submit_button(label="Registrar Albarán")
 
-    if submit_button:
-        if not n_albaran:
-            st.error("El número de albarán es obligatorio")
-        else:
-            # Crear un nuevo registro
-            nuevo_albaran = pd.DataFrame([{
-                "n_albaran": n_albaran,
-                "fecha": str(fecha),
-                "trabajador": trabajador,
-                "partida": partida,
-                "gasto": gasto,
-                "comentarios": comentarios
+# 4. Lógica para guardar datos
+if submit_button:
+    if not n_albaran or not trabajador:
+        st.error("⚠️ Por favor, rellena los campos obligatorios (Albarán y Trabajador).")
+    else:
+        try:
+            # Crear la nueva fila de datos
+            nueva_fila = pd.DataFrame([{
+                "Numero_Albaran": n_albaran,
+                "Fecha": str(fecha),
+                "Trabajador": trabajador,
+                "Partida": partida,
+                "Gastos": gastos,
+                "Comentarios": comentarios
             }])
             
-            # Obtener datos existentes y añadir el nuevo
-            data_existente = conn.read(worksheet="Sheet1")
-            updated_df = pd.concat([data_existente, nuevo_albaran], ignore_index=True)
+            # Unir con los datos existentes
+            updated_df = pd.concat([data, nueva_fila], ignore_index=True)
             
-            # Actualizar Google Sheets
+            # Subir a Google Sheets
             conn.update(worksheet="Sheet1", data=updated_df)
             
-            st.success(f"Albarán {n_albaran} registrado correctamente en el presupuesto.")
-            st.balloons()
+            st.success("✅ ¡Datos guardados correctamente en Google Sheets!")
+            # Forzar recarga de los datos mostrados
+            st.rerun()
+        except Exception as e:
+            st.error(f"❌ Error al guardar: {e}")
 
-# --- VISUALIZACIÓN ---
-if st.checkbox("Mostrar histórico de gastos"):
-    df_visualizar = conn.read(worksheet="Sheet1")
-    st.dataframe(df_visualizar)
+# 5. Visualización del histórico y resumen
+st.divider()
+st.subheader("📊 Histórico de Gastos")
+
+if not data.empty:
+    # Mostrar tabla
+    st.dataframe(data, use_container_width=True)
     
-    # Resumen por partida
-    st.subheader("Gasto acumulado por Partida")
-    resumen = df_visualizar.groupby("partida")["gasto"].sum()
-    st.bar_chart(resumen)
+    # Mostrar total acumulado
+    total = data["Gastos"].astype(float).sum()
+    st.metric("Gasto Total Acumulado", f"{total:,.2f} €")
+else:
+    st.info("Aún no hay registros en la base de datos.")
